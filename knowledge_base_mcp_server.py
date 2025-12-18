@@ -6,160 +6,291 @@ MCP 服务器：将数据库知识库查询功能暴露为 Cursor 可调用的�
 启动示例：
     python knowledge_base_mcp_server.py
 """
-
+from fastmcp import FastMCP
 import asyncio
 import os
+import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
 from langchain_chroma import Chroma
 from langchain_openai import OpenAIEmbeddings
-from mcp.server import InitializationOptions, NotificationOptions, Server
-from mcp.server.stdio import stdio_server
-from mcp.types import ServerCapabilities, TextContent, Tool
+
+# 配置日志
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
 # 基础配置，可通过环境变量覆盖
 OPENAI_API_KEY = os.getenv("openrouter_api_key") or os.getenv("OPENAI_API_KEY")
 OPENAI_BASE_URL = os.getenv("url_openrouter") or os.getenv("OPENAI_BASE_URL") or "https://api.openai.com/v1"
-PERSIST_DIRECTORY = Path(
+CHROMA_DB_DIR = Path(
     os.getenv("KB_PERSIST_DIR", Path(__file__).resolve().parent / "chroma_db")
 )
-COLLECTION_NAME = os.getenv("KB_COLLECTION_NAME", "database_knowledge")
-EMBED_MODEL = os.getenv("KB_EMBED_MODEL", "text-embedding-3-large")
+# 两个独立的知识库
+QUERY_KB_NAME = "query_requirements_kb"
+TABLE_KB_NAME = "meta_tables_kb"
+EMBED_MODEL = os.getenv("KB_EMBED_MODEL", "openai/text-embedding-3-large")
 
 if not OPENAI_API_KEY:
     raise RuntimeError("未设置 OPENAI_API_KEY 或 openrouter_api_key")
 
 
-def _build_vectorstore() -> Chroma:
-    """加载 Chroma 向量库"""
+mcp = FastMCP("knowledge-base-mcp")
+
+
+@mcp.tool
+def kb_search_tables(query: str, k: int = 5) -> str:
+    """
+    在数据表元数据知识库中检索表结构信息。
+    
+    Args:
+        query: 查询文本，例如 "用户信息表" 或 "订单相关的表"
+        k: 返回的结果数量，默认为 5，范围 1-20
+        
+    Returns:
+        格式化的检索结果文本
+        
+    示例:
+        kb_search_tables("用户信息表", 3)
+    """
+    # 参数验证
+    k = max(1, min(20, k))
+    logger.info(f"检索表结构: query={query}, k={k}")
+    return _search_tables(query, k)
+
+
+@mcp.tool
+def kb_search_requirements(query: str, k: int = 5) -> str:
+    """
+    在业务需求查询知识库中检索历史查询需求。
+    
+    Args:
+        query: 查询文本，例如 "放款金额统计" 或 "用户逾期分析"
+        k: 返回的结果数量，默认为 5，范围 1-20
+        
+    Returns:
+        格式化的检索结果文本
+        
+    示例:
+        kb_search_requirements("放款金额统计", 3)
+    """
+    # 参数验证
+    k = max(1, min(20, k))
+    logger.info(f"检索业务需求: query={query}, k={k}")
+    return _search_requirements(query, k)
+
+
+def _build_embeddings() -> OpenAIEmbeddings:
+    """构建 Embeddings 对象"""
     embedding_kwargs: Dict[str, Any] = {
         "model": EMBED_MODEL,
         "api_key": OPENAI_API_KEY,
     }
     if "openrouter" in OPENAI_BASE_URL.lower():
         embedding_kwargs["base_url"] = OPENAI_BASE_URL
-
-    embeddings = OpenAIEmbeddings(**embedding_kwargs)
-    vectorstore = Chroma(
-        collection_name=COLLECTION_NAME,
-        embedding_function=embeddings,
-        persist_directory=str(PERSIST_DIRECTORY),
-    )
-    return vectorstore
+    
+    return OpenAIEmbeddings(**embedding_kwargs)
 
 
-VECTORSTORE = _build_vectorstore()
-SERVER = Server("knowledge-base-mcp")
+def _build_vectorstore(kb_name: str, kb_path: Path) -> Optional[Chroma]:
+    """
+    加载指定的 Chroma 向量库
+    
+    Args:
+        kb_name: 知识库集合名称
+        kb_path: 知识库持久化路径
+        
+    Returns:
+        Chroma 实例，失败时返回 None
+    """
+    try:
+        if not kb_path.exists():
+            logger.warning(f"知识库路径不存在: {kb_path}")
+            return None
+            
+        embeddings = _build_embeddings()
+        vectorstore = Chroma(
+            collection_name=kb_name,
+            embedding_function=embeddings,
+            persist_directory=str(kb_path),
+        )
+        logger.info(f"成功加载知识库: {kb_name} from {kb_path}")
+        return vectorstore
+    except Exception as e:
+        logger.error(f"加载知识库失败 {kb_name}: {e}")
+        return None
 
 
-def _format_doc(doc: Any, index: int) -> str:
-    """将 Chroma Document 转为可读文本"""
+# 初始化两个独立的知识库
+TABLE_KB_PATH = CHROMA_DB_DIR / TABLE_KB_NAME
+QUERY_KB_PATH = CHROMA_DB_DIR / QUERY_KB_NAME
+
+TABLE_VECTORSTORE = _build_vectorstore(TABLE_KB_NAME, TABLE_KB_PATH)
+QUERY_VECTORSTORE = _build_vectorstore(QUERY_KB_NAME, QUERY_KB_PATH)
+
+def _format_table_doc(doc: Any, index: int, score: Optional[float] = None) -> str:
+    """
+    将表结构 Document 转为可读文本
+    
+    Args:
+        doc: Document 对象
+        index: 结果序号
+        score: 相似度分数（可选）
+        
+    Returns:
+        格式化的文本
+    """
     meta = doc.metadata or {}
-    doc_type = meta.get("type", "unknown")
+    table_name = meta.get('table_name', '未知表')
+    table_id = meta.get('id', '')
+    
+    title = f"【结果 {index}】表名: {table_name}"
+    if table_id:
+        title += f" (ID: {table_id})"
+    if score is not None:
+        title += f" [相似度: {score:.4f}]"
+    
+    content = doc.page_content.strip()
+    
+    return f"{title}\n{'-' * 60}\n{content}\n"
 
-    if doc_type == "business_query":
-        title = f"查询 {meta.get('query_id', '')} - {meta.get('query_name', '')}".strip()
-    elif doc_type == "table_schema":
-        title = f"表结构 {meta.get('table_name', '')} - {meta.get('table_comment', '')}".strip()
-    else:
-        title = meta.get("source", "unknown")
 
-    return f"【结果 {index}】{title}\n{doc.page_content}"
+def _format_requirement_doc(doc: Any, index: int, score: Optional[float] = None) -> str:
+    """
+    将业务需求 Document 转为可读文本
+    
+    Args:
+        doc: Document 对象
+        index: 结果序号
+        score: 相似度分数（可选）
+        
+    Returns:
+        格式化的文本
+    """
+    meta = doc.metadata or {}
+    query_id = meta.get('id', '')
+    query_name = meta.get('name', '未知查询')
+    
+    title = f"【结果 {index}】查询: {query_name}"
+    if query_id:
+        title += f" (ID: {query_id})"
+    if score is not None:
+        title += f" [相似度: {score:.4f}]"
+    
+    content = doc.page_content.strip()
+    
+    return f"{title}\n{'-' * 60}\n{content}\n"
 
 
-def _search(query: str, scope: str, k: int) -> str:
-    """执行检索并格式化结果"""
-    filter_arg: Optional[Dict[str, str]] = None
-    if scope == "business":
-        filter_arg = {"type": "business_query"}
-    elif scope == "schema":
-        filter_arg = {"type": "table_schema"}
-
+def _search_tables(query: str, k: int) -> str:
+    """
+    在表结构知识库中检索
+    
+    Args:
+        query: 查询文本
+        k: 返回结果数量
+        
+    Returns:
+        格式化的检索结果
+    """
+    if TABLE_VECTORSTORE is None:
+        error_msg = f"❌ 表结构知识库未初始化，请检查路径: {TABLE_KB_PATH}"
+        logger.error(error_msg)
+        return error_msg
+    
     try:
-        docs = VECTORSTORE.similarity_search(query, k=k, filter=filter_arg)
-    except Exception as exc:  # 兜底捕获以返回给 MCP
-        return f"检索失败: {exc}"
-
-    if not docs:
-        return "未找到相关内容。"
-
-    parts = [_format_doc(doc, i + 1) for i, doc in enumerate(docs)]
-    return "\n\n".join(parts)
-
-
-@SERVER.list_tools()
-async def list_tools() -> List[Tool]:
-    """MCP: 列出可用工具"""
-    return [
-        Tool(
-            name="kb_search",
-            description="在数据库知识库中检索业务查询与表结构。"
-            "scope 取值: business(仅业务查询)/schema(仅表结构)/all(默认)。"
-            "k 为返回数量，1-10。",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string", "description": "检索问题或关键词"},
-                    "scope": {
-                        "type": "string",
-                        "enum": ["business", "schema", "all"],
-                        "default": "all",
-                    },
-                    "k": {
-                        "type": "integer",
-                        "minimum": 1,
-                        "maximum": 10,
-                        "default": 3,
-                    },
-                },
-                "required": ["query"],
-            },
-        )
-    ]
+        # 使用 similarity_search_with_score 获取相似度分数
+        results = TABLE_VECTORSTORE.similarity_search_with_score(query, k=k)
+        
+        if not results:
+            return "未找到相关表结构信息。"
+        
+        parts = []
+        for i, (doc, distance) in enumerate(results, 1):
+            # 将距离转换为相似度 (越小越相似)
+            similarity = 1 - distance
+            parts.append(_format_table_doc(doc, i, similarity))
+        
+        result_text = "\n".join(parts)
+        logger.info(f"表结构检索成功，返回 {len(results)} 条结果")
+        return result_text
+        
+    except Exception as exc:
+        error_msg = f"❌ 表结构检索失败: {exc}"
+        logger.error(error_msg, exc_info=True)
+        return error_msg
 
 
-@SERVER.call_tool()
-async def call_tool(name: str, arguments: Dict[str, Any]) -> List[TextContent]:
-    """MCP: 执行检索工具"""
-    if name != "kb_search":
-        raise ValueError(f"未知工具: {name}")
-
-    query = str(arguments.get("query", "")).strip()
-    if not query:
-        return [TextContent(type="text", text="query 不能为空")]
-
-    scope = str(arguments.get("scope", "all")).strip().lower()
-    if scope not in {"business", "schema", "all"}:
-        scope = "all"
-
+def _search_requirements(query: str, k: int) -> str:
+    """
+    在业务需求知识库中检索
+    
+    Args:
+        query: 查询文本
+        k: 返回结果数量
+        
+    Returns:
+        格式化的检索结果
+    """
+    if QUERY_VECTORSTORE is None:
+        error_msg = f"❌ 业务需求知识库未初始化，请检查路径: {QUERY_KB_PATH}"
+        logger.error(error_msg)
+        return error_msg
+    
     try:
-        k = int(arguments.get("k", 3))
-    except Exception:
-        k = 3
-    k = max(1, min(10, k))
-
-    result_text = _search(query=query, scope=scope, k=k)
-    return [TextContent(type="text", text=result_text)]
-
-
-async def main() -> None:
-    """入口：运行 MCP 服务器（stdio）"""
-    async with stdio_server() as (read_stream, write_stream):
-        init_options = SERVER.create_initialization_options(
-            notification_options=NotificationOptions(),
-            experimental_capabilities={},
-        )
-        await SERVER.run(
-            read_stream,
-            write_stream,
-            initialization_options=init_options,  # 可按需传递客户端初始化参数
-        )
-
+        # 使用 similarity_search_with_score 获取相似度分数
+        results = QUERY_VECTORSTORE.similarity_search_with_score(query, k=k)
+        
+        if not results:
+            return "未找到相关业务需求。"
+        
+        parts = []
+        for i, (doc, distance) in enumerate(results, 1):
+            # 将距离转换为相似度 (越小越相似)
+            similarity = 1 - distance
+            parts.append(_format_requirement_doc(doc, i, similarity))
+        
+        result_text = "\n".join(parts)
+        logger.info(f"业务需求检索成功，返回 {len(results)} 条结果")
+        return result_text
+        
+    except Exception as exc:
+        error_msg = f"❌ 业务需求检索失败: {exc}"
+        logger.error(error_msg, exc_info=True)
+        return error_msg
 
 if __name__ == "__main__":
-    asyncio.run(main())
-
+    logger.info("=" * 60)
+    logger.info("启动知识库 MCP 服务器")
+    logger.info("=" * 60)
+    logger.info(f"表结构知识库: {TABLE_KB_PATH}")
+    logger.info(f"业务需求知识库: {QUERY_KB_PATH}")
+    logger.info(f"Embedding 模型: {EMBED_MODEL}")
+    
+    # 检查知识库状态
+    if TABLE_VECTORSTORE is None:
+        logger.warning("⚠️  表结构知识库未成功加载")
+    else:
+        logger.info("✅ 表结构知识库已加载")
+    
+    if QUERY_VECTORSTORE is None:
+        logger.warning("⚠️  业务需求知识库未成功加载")
+    else:
+        logger.info("✅ 业务需求知识库已加载")
+    
+    logger.info("=" * 60)
+    logger.info("MCP 服务器运行中...")
+    
+    try:
+        mcp.run(transport="stdio")
+    except KeyboardInterrupt:
+        logger.info("\n收到中断信号，关闭服务器...")
+    except Exception as e:
+        logger.error(f"服务器运行错误: {e}", exc_info=True)
+        raise  
