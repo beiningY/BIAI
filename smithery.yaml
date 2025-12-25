@@ -1,24 +1,2 @@
 # smithery.yaml
-
-# 配置文件 schema 的版本，目前通常是 1。
-version: 1
-
-# 你部署的资源类型。对于 MCP 服务器，这个值总是 'server'。
-kind: server
-
-# 你的服务器在 Smithery 上的唯一名称。
-# - 必须是全局唯一的。
-# - 只能包含小写字母、数字和连字符 (-)。
-# - 这个名称会成为你服务器 URL 的一部分:
-#   https://server.smithery.ai/<your-username>/<this-name>
-name: my-knowledge-base-server
-
-# 你使用的 SDK 或语言。对于 Python 项目，这里是 'python'。
-# 对于 TypeScript/JavaScript 项目，这里是 'typescript'。
-sdk: python
-
-# 应用程序的入口点，这是最关键的字段之一。
-# 格式为: [文件名]:[文件内 Server 实例的变量名]
-# 例如，如果你的 Server 对象在 main.py 中定义为 server = Server(...)，
-# 那么入口点就是 'main:server'。
-entrypoint: main:mcp
+runtime: "python"

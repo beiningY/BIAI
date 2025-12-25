@@ -21,7 +21,9 @@
 ### 1. 安装依赖
 
 ```bash
-pip install -r requirements.txt
+# 推荐：使用 uv（读取 pyproject.toml）
+pip install uv
+uv sync
 ```
 
 ### 2. 配置环境变量
@@ -37,7 +39,7 @@ export OPENAI_API_KEY="your-api-key-here"
 运行构建脚本，将数据导入Chroma向量数据库：
 
 ```bash
-python build_knowledge_base.py
+python build_knowledge_base_enhanced.py
 ```
 
 这将：
@@ -202,12 +204,23 @@ vectorstore = builder.build_vector_store(
 
 ```
 数据库自动化/
-├── build_knowledge_base.py      # 知识库构建脚本
-├── query_knowledge_base.py      # 知识库查询示例
-├── requirements.txt             # Python依赖
+├── build_knowledge_base_enhanced.py  # 知识库构建脚本（增强版）
+├── query_kb_simple.py                # 知识库查询示例
+├── pyproject.toml                    # 依赖与项目元数据（替代 requirements.txt）
+├── smithery.yaml                     # Smithery 运行时声明
+├── src/biai_server/server.py         # MCP Server（create_server 工厂函数）
 ├── query_business_requirements.json  # 业务查询数据
 ├── schema.sql                   # 数据库Schema
 └── chroma_db/                   # Chroma向量数据库（自动生成）
+```
+
+## 🧩 Smithery 部署入口
+
+- **server factory**: `biai_server.server:create_server`
+- **本地运行（兼容入口）**:
+
+```bash
+uv run python main.py
 ```
 
 ## 🎯 典型应用场景
