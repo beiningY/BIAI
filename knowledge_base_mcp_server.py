@@ -17,6 +17,9 @@ from dotenv import load_dotenv
 from langchain_chroma import Chroma
 from langchain_openai import OpenAIEmbeddings
 
+# 导入增强版格式化器
+from enhanced_formatter import format_table_results, format_requirement_results
+
 # 配置日志
 logging.basicConfig(
     level=logging.INFO,
@@ -109,6 +112,7 @@ def _build_vectorstore(kb_name: str, kb_path: Path) -> Optional[Chroma]:
     Returns:
         Chroma 实例，失败时返回 None
     """
+
     try:
         if not kb_path.exists():
             logger.warning(f"知识库路径不存在: {kb_path}")
@@ -134,63 +138,17 @@ QUERY_KB_PATH = CHROMA_DB_DIR / QUERY_KB_NAME
 TABLE_VECTORSTORE = _build_vectorstore(TABLE_KB_NAME, TABLE_KB_PATH)
 QUERY_VECTORSTORE = _build_vectorstore(QUERY_KB_NAME, QUERY_KB_PATH)
 
-def _format_table_doc(doc: Any, index: int, score: Optional[float] = None) -> str:
-    """
-    将表结构 Document 转为可读文本
-    
-    Args:
-        doc: Document 对象
-        index: 结果序号
-        score: 相似度分数（可选）
-        
-    Returns:
-        格式化的文本
-    """
-    meta = doc.metadata or {}
-    table_name = meta.get('table_name', '未知表')
-    table_id = meta.get('id', '')
-    
-    title = f"【结果 {index}】表名: {table_name}"
-    if table_id:
-        title += f" (ID: {table_id})"
-    if score is not None:
-        title += f" [相似度: {score:.4f}]"
-    
-    content = doc.page_content.strip()
-    
-    return f"{title}\n{'-' * 60}\n{content}\n"
-
-
-def _format_requirement_doc(doc: Any, index: int, score: Optional[float] = None) -> str:
-    """
-    将业务需求 Document 转为可读文本
-    
-    Args:
-        doc: Document 对象
-        index: 结果序号
-        score: 相似度分数（可选）
-        
-    Returns:
-        格式化的文本
-    """
-    meta = doc.metadata or {}
-    query_id = meta.get('id', '')
-    query_name = meta.get('name', '未知查询')
-    
-    title = f"【结果 {index}】查询: {query_name}"
-    if query_id:
-        title += f" (ID: {query_id})"
-    if score is not None:
-        title += f" [相似度: {score:.4f}]"
-    
-    content = doc.page_content.strip()
-    
-    return f"{title}\n{'-' * 60}\n{content}\n"
+# 旧的格式化函数已被移除，现在使用 enhanced_formatter 模块中的函数
+# format_table_results() 和 format_requirement_results()
+# 新格式化器返回完整的结构化数据：
+# - 表查询：table_id, table_name, chunk_content, column_description
+# - 需求查询：query_id, name, requirement
 
 
 def _search_tables(query: str, k: int) -> str:
     """
     在表结构知识库中检索
+    使用增强版格式化器返回完整数据：table_id, table_name, chunk_content, column_description
     
     Args:
         query: 查询文本
@@ -211,13 +169,8 @@ def _search_tables(query: str, k: int) -> str:
         if not results:
             return "未找到相关表结构信息。"
         
-        parts = []
-        for i, (doc, distance) in enumerate(results, 1):
-            # 将距离转换为相似度 (越小越相似)
-            similarity = 1 - distance
-            parts.append(_format_table_doc(doc, i, similarity))
-        
-        result_text = "\n".join(parts)
+        # 使用增强版格式化器
+        result_text = format_table_results(results, query)
         logger.info(f"表结构检索成功，返回 {len(results)} 条结果")
         return result_text
         
@@ -230,6 +183,7 @@ def _search_tables(query: str, k: int) -> str:
 def _search_requirements(query: str, k: int) -> str:
     """
     在业务需求知识库中检索
+    使用增强版格式化器返回完整数据：query_id, name, requirement
     
     Args:
         query: 查询文本
@@ -250,13 +204,8 @@ def _search_requirements(query: str, k: int) -> str:
         if not results:
             return "未找到相关业务需求。"
         
-        parts = []
-        for i, (doc, distance) in enumerate(results, 1):
-            # 将距离转换为相似度 (越小越相似)
-            similarity = 1 - distance
-            parts.append(_format_requirement_doc(doc, i, similarity))
-        
-        result_text = "\n".join(parts)
+        # 使用增强版格式化器
+        result_text = format_requirement_results(results, query)
         logger.info(f"业务需求检索成功，返回 {len(results)} 条结果")
         return result_text
         
