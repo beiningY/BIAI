@@ -10,14 +10,14 @@ WORKDIR /app
 
 # 为了更好地利用Docker的缓存机制，先复制依赖管理文件
 COPY pyproject.toml uv.lock* ./
-
+# 复制您项目的源代码
+COPY ./src ./src
 # 安装uv并同步Python依赖
 # 'pip install uv' 确保uv在镜像中可用
 # 'uv sync' 会根据uv.lock或pyproject.toml安装所有包
 RUN pip install uv && uv sync --no-dev
 
-# 复制您项目的源代码
-COPY ./src ./src
+
 
 # 暴露端口，Smithery会使用它
 EXPOSE 8080
