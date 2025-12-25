@@ -1,6 +1,2 @@
 # smithery.yaml
 runtime: "python"
-
-# Hypothetical configuration
-allowed_hosts:
-  - 50fa2ffb.ngrok.smithery.ai
