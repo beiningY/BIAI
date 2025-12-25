@@ -1,4 +1,6 @@
-# smithery.yaml
-
-# 不再使用 'runtime'，而是指定使用我们自己编写的 Dockerfile
-dockerfile: Dockerfile
+runtime: "container"
+build:
+  dockerfile: "Dockerfile"
+  dockerBuildPath: "."
+startCommand:
+  type: "http"
