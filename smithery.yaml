@@ -1,7 +1,4 @@
 # smithery.yaml
 
-runtime: "python"
-
-# 新增的部分：告诉Smithery需要安装的系统级依赖
-systemPackages:
-  - build-essential
+# 不再使用 'runtime'，而是指定使用我们自己编写的 Dockerfile
+dockerfile: Dockerfile
