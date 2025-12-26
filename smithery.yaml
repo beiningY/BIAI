@@ -1,6 +1,20 @@
 runtime: "container"
 build:
-  dockerfile: "Dockerfile"
-  dockerBuildPath: "."
+  dockerfile: "Dockerfile"           # Path to your Dockerfile
+  dockerBuildPath: "."               # Docker build context
 startCommand:
   type: "http"
+  configSchema:
+    type: "object"
+    properties:
+      serverToken:
+        type: "string"
+        description: "Server token for accessing the Character Counter server (optional for demo)"
+      caseSensitive:
+        type: "boolean"
+        description: "Whether character matching should be case sensitive"
+        default: false
+    required: [] # add `serverToken` here to make it required
+  exampleConfig:
+    serverToken: "demo-token"
+    caseSensitive: false 
